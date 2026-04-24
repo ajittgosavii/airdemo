@@ -62,8 +62,17 @@ st.set_page_config(page_title="AI Code Reviewer", layout="wide")
 st.title("AI Code Reviewer")
 st.caption("Powered by Claude claude-sonnet-4-6")
 
+# Resolve API key: Streamlit secrets take priority, sidebar input is the fallback.
+_secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+
 with st.sidebar:
-    api_key = st.text_input("Anthropic API Key", type="password", placeholder="sk-ant-...")
+    api_key = st.text_input(
+        "Anthropic API Key",
+        value=_secret_key,
+        type="password",
+        placeholder="sk-ant-...",
+        help="Or set ANTHROPIC_API_KEY in Streamlit Cloud secrets.",
+    )
 
 language = st.selectbox("Language", ["Python", "JavaScript", "Java", "Go", "SQL"])
 
