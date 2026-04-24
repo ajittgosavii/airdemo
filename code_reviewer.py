@@ -129,7 +129,7 @@ if st.button("Review My Code", type="primary"):
         st.rerun()  # clean rerun so results render from state (not inside button)
 
 # ── RENDER RESULTS (always from session state) ─────────────────────────────
-if "review_result" in st.session_state and not st.session_state.get("do_fix"):
+if "review_result" in st.session_state:
     result = st.session_state["review_result"]
 
     with st.expander("✅ Summary", expanded=True):
@@ -171,52 +171,51 @@ if "review_result" in st.session_state and not st.session_state.get("do_fix"):
     if bugs or security or performance:
         st.divider()
         if st.button("🔧 Fix Now", type="primary"):
-            st.session_state["do_fix"] = True
+            src_code = st.session_state["reviewed_code"]
+            src_lang = st.session_state["reviewed_language"]
+
+            issues = []
+            for item in bugs:
+                issues.append(f"- Bug (line {item['line']}, {item['severity']}): {item['description']}")
+            for item in security:
+                issues.append(f"- Security (line {item['line']}, {item['severity']}): {item['description']}")
+            for item in performance:
+                issues.append(f"- Performance (line {item['line']}): {item['description']}")
+
+            # Clear review state so Fix Now won't reappear after the fix rerun
+            del st.session_state["review_result"]
+            del st.session_state["reviewed_code"]
+            del st.session_state["reviewed_language"]
+
+            client = anthropic.Anthropic(api_key=api_key)
+
+            st.markdown("### 🔧 Fixed Code")
+            st.caption("Streaming fix from Claude…")
+            placeholder = st.empty()
+            accumulated = ""
+
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                system=(
+                    "You are an expert software engineer. Fix only the issues listed. "
+                    "Return the complete corrected source file and nothing else — "
+                    "no explanations, no markdown fences, no commentary."
+                ),
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Fix the following issues in this {src_lang} code:\n\n"
+                        + "\n".join(issues)
+                        + f"\n\nOriginal code:\n\n{src_code}"
+                    ),
+                }],
+            ) as stream:
+                for token in stream.text_stream:
+                    accumulated += token
+                    placeholder.code(accumulated, language=src_lang.lower())
+
+            # Use pending_fix (not code_input directly) to avoid StreamlitAPIException
+            st.session_state["pending_fix"] = accumulated
+            st.success("✅ Fix applied — editor updated.")
             st.rerun()
-
-# ── FIX EXECUTION (runs on its own clean render, review_result still set) ──
-if st.session_state.get("do_fix"):
-    result   = st.session_state.pop("review_result")
-    src_code = st.session_state.pop("reviewed_code")
-    src_lang = st.session_state.pop("reviewed_language")
-    st.session_state.pop("do_fix")
-
-    issues = []
-    for item in result["bugs"]:
-        issues.append(f"- Bug (line {item['line']}, {item['severity']}): {item['description']}")
-    for item in result["security"]:
-        issues.append(f"- Security (line {item['line']}, {item['severity']}): {item['description']}")
-    for item in result["performance"]:
-        issues.append(f"- Performance (line {item['line']}): {item['description']}")
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    st.markdown("### 🔧 Fixed Code")
-    st.caption("Streaming fix from Claude…")
-    placeholder = st.empty()
-    accumulated = ""
-
-    with client.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        system=(
-            "You are an expert software engineer. Fix only the issues listed. "
-            "Return the complete corrected source file and nothing else — "
-            "no explanations, no markdown fences, no commentary."
-        ),
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Fix the following issues in this {src_lang} code:\n\n"
-                + "\n".join(issues)
-                + f"\n\nOriginal code:\n\n{src_code}"
-            ),
-        }],
-    ) as stream:
-        for token in stream.text_stream:
-            accumulated += token
-            placeholder.code(accumulated, language=src_lang.lower())
-
-    st.session_state["pending_fix"] = accumulated
-    st.success("✅ Fix applied — editor updated.")
-    st.rerun()
