@@ -166,11 +166,16 @@ if st.button("Review My Code", type="primary"):
             else:
                 st.write("No performance issues found.")
 
-# Fix Now — shown whenever a review result is available
-if "review_result" in st.session_state:
+# Fix Now — only shown when there are actual issues to fix
+_review = st.session_state.get("review_result")
+_has_issues = _review and (
+    _review["bugs"] or _review["security"] or _review["performance"]
+)
+
+if _has_issues:
     st.divider()
     if st.button("🔧 Fix Now", type="primary"):
-        result   = st.session_state["review_result"]
+        result   = st.session_state.pop("review_result")  # clear immediately
         src_code = st.session_state["reviewed_code"]
         src_lang = st.session_state["reviewed_language"]
 
@@ -183,7 +188,7 @@ if "review_result" in st.session_state:
         for item in result["performance"]:
             issues.append(f"- Performance (line {item['line']}): {item['description']}")
 
-        issues_text = "\n".join(issues) if issues else "General code quality improvements."
+        issues_text = "\n".join(issues)
 
         client = anthropic.Anthropic(api_key=api_key)
 
@@ -219,5 +224,4 @@ if "review_result" in st.session_state:
         # Stage the fix — applied to the widget key at the top of the next run
         st.session_state["pending_fix"] = accumulated
         st.success("✅ Fix applied — code updated above.")
-        del st.session_state["review_result"]  # reset so button disappears
         st.rerun()
