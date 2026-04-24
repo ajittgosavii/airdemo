@@ -122,6 +122,11 @@ if st.button("Review My Code", type="primary"):
         tool_block = next(b for b in response.content if b.type == "tool_use")
         result = tool_block.input
 
+        # Persist for the Fix Now button
+        st.session_state["review_result"] = result
+        st.session_state["reviewed_code"] = code
+        st.session_state["reviewed_language"] = language
+
         with st.expander("✅ Summary", expanded=True):
             st.write(result["summary"])
 
@@ -156,3 +161,59 @@ if st.button("Review My Code", type="primary"):
                     st.markdown(f"- Line {item['line']}: {item['description']}")
             else:
                 st.write("No performance issues found.")
+
+# Fix Now — shown whenever a review result is available
+if "review_result" in st.session_state:
+    st.divider()
+    if st.button("🔧 Fix Now", type="primary"):
+        result   = st.session_state["review_result"]
+        src_code = st.session_state["reviewed_code"]
+        src_lang = st.session_state["reviewed_language"]
+
+        # Build a concise list of issues for the fix prompt
+        issues = []
+        for item in result["bugs"]:
+            issues.append(f"- Bug (line {item['line']}, {item['severity']}): {item['description']}")
+        for item in result["security"]:
+            issues.append(f"- Security (line {item['line']}, {item['severity']}): {item['description']}")
+        for item in result["performance"]:
+            issues.append(f"- Performance (line {item['line']}): {item['description']}")
+
+        issues_text = "\n".join(issues) if issues else "General code quality improvements."
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        st.markdown("### 🔧 Fixed Code")
+        st.caption("Streaming fix from Claude…")
+
+        fixed_placeholder = st.empty()
+        accumulated = ""
+
+        with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=(
+                "You are an expert software engineer. Fix only the issues listed. "
+                "Return the complete corrected source file and nothing else — "
+                "no explanations, no markdown fences, no commentary."
+            ),
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Fix the following issues in this {src_lang} code:\n\n"
+                        f"{issues_text}\n\n"
+                        f"Original code:\n\n{src_code}"
+                    ),
+                }
+            ],
+        ) as stream:
+            for token in stream.text_stream:
+                accumulated += token
+                fixed_placeholder.code(accumulated, language=src_lang.lower())
+
+        # Replace text area with fixed code
+        st.session_state["code_input"] = accumulated
+        st.success("✅ Fix applied — code updated above.")
+        del st.session_state["review_result"]  # reset so button disappears
+        st.rerun()
