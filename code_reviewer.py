@@ -76,6 +76,10 @@ with st.sidebar:
 
 language = st.selectbox("Language", ["Python", "JavaScript", "Java", "Go", "SQL"])
 
+# Apply any pending fix BEFORE the widget renders (avoids StreamlitAPIException)
+if "pending_fix" in st.session_state:
+    st.session_state["code_input"] = st.session_state.pop("pending_fix")
+
 # File uploader — populates the text area via session state
 if "code_input" not in st.session_state:
     st.session_state["code_input"] = ""
@@ -212,8 +216,8 @@ if "review_result" in st.session_state:
                 accumulated += token
                 fixed_placeholder.code(accumulated, language=src_lang.lower())
 
-        # Replace text area with fixed code
-        st.session_state["code_input"] = accumulated
+        # Stage the fix — applied to the widget key at the top of the next run
+        st.session_state["pending_fix"] = accumulated
         st.success("✅ Fix applied — code updated above.")
         del st.session_state["review_result"]  # reset so button disappears
         st.rerun()
