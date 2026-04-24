@@ -58,15 +58,12 @@ SEVERITY_BADGE = {
     "LOW":    '<span style="background:#2563eb;color:white;padding:2px 8px;border-radius:4px;font-size:0.75rem;font-weight:600">LOW</span>',
 }
 
-def _trigger_fix():
-    st.session_state["do_fix"] = True
-
+# ── PAGE SETUP ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="AI Code Reviewer", layout="wide")
 st.title("AI Code Reviewer")
 st.caption("Powered by Claude claude-sonnet-4-6")
 
 _secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-
 with st.sidebar:
     api_key = st.text_input(
         "Anthropic API Key",
@@ -76,9 +73,58 @@ with st.sidebar:
         help="Or set ANTHROPIC_API_KEY in Streamlit Cloud secrets.",
     )
 
+# ── FIX EXECUTION (right after api_key is available, before any other widget) ─
+# The on_click callback stores everything needed so this block runs at the
+# top of the script and the results section (Fix Now button) is NEVER reached.
+if st.session_state.get("do_fix"):
+    _key      = st.session_state.pop("_fix_api_key", api_key)
+    _result   = st.session_state.pop("_fix_result", {})
+    _src_code = st.session_state.pop("_fix_code", "")
+    _src_lang = st.session_state.pop("_fix_lang", "Python")
+    st.session_state.pop("do_fix", None)
+
+    _issues = []
+    for item in _result.get("bugs", []):
+        _issues.append(f"- Bug (line {item['line']}, {item['severity']}): {item['description']}")
+    for item in _result.get("security", []):
+        _issues.append(f"- Security (line {item['line']}, {item['severity']}): {item['description']}")
+    for item in _result.get("performance", []):
+        _issues.append(f"- Performance (line {item['line']}): {item['description']}")
+
+    st.markdown("### 🔧 Fixed Code")
+    st.caption("Streaming fix from Claude…")
+    _placeholder = st.empty()
+    _accumulated = ""
+
+    with anthropic.Anthropic(api_key=_key).messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        system=(
+            "You are an expert software engineer. Fix only the issues listed. "
+            "Return the complete corrected source file and nothing else — "
+            "no explanations, no markdown fences, no commentary."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Fix the following issues in this {_src_lang} code:\n\n"
+                + "\n".join(_issues)
+                + f"\n\nOriginal code:\n\n{_src_code}"
+            ),
+        }],
+    ) as _stream:
+        for _token in _stream.text_stream:
+            _accumulated += _token
+            _placeholder.code(_accumulated, language=_src_lang.lower())
+
+    st.session_state["pending_fix"] = _accumulated
+    st.success("✅ Fix applied — editor updated.")
+    st.rerun()  # script stops here; next run applies pending_fix and skips results
+
+# ── REST OF NORMAL FLOW ───────────────────────────────────────────────────────
 language = st.selectbox("Language", ["Python", "JavaScript", "Java", "Go", "SQL"])
 
-# Phase 1: apply any pending fix before the widget renders
+# Apply any pending fix before the key-bound widget renders
 if "pending_fix" in st.session_state:
     st.session_state["code_input"] = st.session_state.pop("pending_fix")
 
@@ -103,8 +149,7 @@ if st.button("Review My Code", type="primary"):
     elif not code.strip():
         st.warning("Please paste or upload some code to review.")
     else:
-        # Clear any previous review so Fix Now cannot linger
-        for k in ("review_result", "reviewed_code", "reviewed_language", "do_fix"):
+        for k in ("review_result", "reviewed_code", "reviewed_language"):
             st.session_state.pop(k, None)
 
         client = anthropic.Anthropic(api_key=api_key)
@@ -126,65 +171,12 @@ if st.button("Review My Code", type="primary"):
             )
 
         tool_block = next(b for b in response.content if b.type == "tool_use")
-        st.session_state["review_result"]    = tool_block.input
-        st.session_state["reviewed_code"]    = code
+        st.session_state["review_result"]     = tool_block.input
+        st.session_state["reviewed_code"]     = code
         st.session_state["reviewed_language"] = language
         st.rerun()
 
-# ── FIX (runs before results render so Fix Now button never shows on fix rerun) ─
-if st.session_state.get("do_fix"):
-    _result  = st.session_state.get("review_result", {})
-    src_code = st.session_state.get("reviewed_code", "")
-    src_lang = st.session_state.get("reviewed_language", "Python")
-
-    _bugs        = _result.get("bugs", [])
-    _security    = _result.get("security", [])
-    _performance = _result.get("performance", [])
-
-    issues = []
-    for item in _bugs:
-        issues.append(f"- Bug (line {item['line']}, {item['severity']}): {item['description']}")
-    for item in _security:
-        issues.append(f"- Security (line {item['line']}, {item['severity']}): {item['description']}")
-    for item in _performance:
-        issues.append(f"- Performance (line {item['line']}): {item['description']}")
-
-    # Clear all review state before streaming
-    for k in ("do_fix", "review_result", "reviewed_code", "reviewed_language"):
-        st.session_state.pop(k, None)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    st.markdown("### 🔧 Fixed Code")
-    st.caption("Streaming fix from Claude…")
-    placeholder = st.empty()
-    accumulated = ""
-
-    with client.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        system=(
-            "You are an expert software engineer. Fix only the issues listed. "
-            "Return the complete corrected source file and nothing else — "
-            "no explanations, no markdown fences, no commentary."
-        ),
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Fix the following issues in this {src_lang} code:\n\n"
-                + "\n".join(issues)
-                + f"\n\nOriginal code:\n\n{src_code}"
-            ),
-        }],
-    ) as stream:
-        for token in stream.text_stream:
-            accumulated += token
-            placeholder.code(accumulated, language=src_lang.lower())
-
-    st.session_state["pending_fix"] = accumulated
-    st.success("✅ Fix applied — editor updated.")
-    st.rerun()
-
-# ── RENDER RESULTS (always from session state) ─────────────────────────────
+# ── RENDER RESULTS ────────────────────────────────────────────────────────────
 if "review_result" in st.session_state:
     result = st.session_state["review_result"]
 
@@ -225,11 +217,24 @@ if "review_result" in st.session_state:
 
     if bugs or security or performance:
         st.divider()
+
+        def _on_fix_click():
+            """Snapshot everything into session state so do_fix block at top can run independently."""
+            st.session_state["do_fix"]        = True
+            st.session_state["_fix_api_key"]  = api_key
+            st.session_state["_fix_result"]   = st.session_state.get("review_result", {})
+            st.session_state["_fix_code"]     = st.session_state.get("reviewed_code", "")
+            st.session_state["_fix_lang"]     = st.session_state.get("reviewed_language", "Python")
+            # Clear review state in the callback so it's gone on the next render
+            for k in ("review_result", "reviewed_code", "reviewed_language"):
+                st.session_state.pop(k, None)
+
+        def _on_clear_click():
+            for k in ("review_result", "reviewed_code", "reviewed_language"):
+                st.session_state.pop(k, None)
+
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.button("🔧 Fix Now", type="primary", on_click=_trigger_fix, use_container_width=True)
+            st.button("🔧 Fix Now", type="primary", on_click=_on_fix_click, use_container_width=True)
         with col2:
-            if st.button("🗑️ Clear Review", use_container_width=True):
-                for k in ("review_result", "reviewed_code", "reviewed_language", "do_fix"):
-                    st.session_state.pop(k, None)
-                st.rerun()
+            st.button("🗑️ Clear Review", on_click=_on_clear_click, use_container_width=True)
